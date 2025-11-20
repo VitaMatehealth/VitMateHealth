@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VitaMate - The Future of Nutrition</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font: Inter & Space Grotesk for Headers -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..900&family=Space+Grotesk:wght@300..700&display=swap" rel="stylesheet">
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- GSAP (GreenSock) for High-Performance Animations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+    
+    <!-- FIREBASE IMPORTS -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, where, getDocs, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- PRODUCTION CONFIGURATION START ---
+        // These are your permanent, hardcoded Firebase keys (vitamate-52375)
+        const firebaseConfig = {
+            apiKey: "AIzaSyBVI0M7EF6d6G088Z-09E1OzjalNgVUN1s",
+            authDomain: "vitamate-52375.firebaseapp.com",
+            projectId: "vitamate-52375",
+            storageBucket: "vitamate-52375.firebasestorage.app",
+            messagingSenderId: "449867580180",
+            appId: "1:449867580180:web:0e37660bd8b5a80fa93801",
+            measurementId: "G-TXT6EDFLCZ"
+        };
+        // Use projectId as appId and disable initial token for public deployment
+        const appId = firebaseConfig.projectId; 
+        const initialAuthToken = null; 
+        // --- PRODUCTION CONFIGURATION END ---
+        
+        // Define global variables within the module for access by window.handler
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        
+        let ADMIN_USER_ID = null;
+
+        async function authenticateAndSetup() {
+            try {
+                // Ensure auth is ready
+                if (!auth.currentUser) {
+                    await signInAnonymously(auth);
+                }
+                
+                ADMIN_USER_ID = auth.currentUser?.uid;
+                fetchAndDisplayWaitlist(db, appId, ADMIN_USER_ID);
+            } catch (error) {
+                console.error("Auth error during setup:", error);
+            }
+        }
+
+        // Re-implementing the fetch function globally accessible
+        window.handleWaitlistSubmission = async function(event) {
+            event.preventDefault();
+            const btn = document.getElementById('submitBtn');
+            const originalText = btn.innerHTML;
+            
+            // Animation for button load
+            btn.innerHTML = '<span class="animate-spin inline-block mr-2">⟳</span> Processing...';
+            document.getElementById('error-message').textContent = ''; // Clear previous errors
+
+            // 1. Ensure user is authenticated
+            let userId = auth.currentUser?.uid;
+            if (!userId) {
+                // If not signed in, sign in anonymously and wait
+                await authenticateAndSetup();
+                userId = auth.currentUser?.uid;
+            }
+
+            if (!userId) {
+                // If sign-in still failed, stop and throw an error
+                console.error("Authentication failed. Cannot submit data without a user ID.");
+                document.getElementById('error-message').textContent = 'Submission Error: Authentication failed. Try refreshing the page.';
+                gsap.to('#errorMessage', { autoAlpha: 1, duration: 0.5 });
+                btn.innerHTML = originalText;
+                return;
+            }
+
+            const name = document.getElementById('name').value;
+            const email = document.getElementById('email').value;
+            const tier = document.getElementById('tierInterest').value;
+
+
+            try {
+                // Saves to: /artifacts/vitamate-52375/public/data/waitlist_entries
+                const ref = collection(db, `/artifacts/${appId}/public/data/waitlist_entries`);
+                await addDoc(ref, { name, email, tier, timestamp: new Date().toISOString(), userId: userId });
+                
+                // Success Animation
+                gsap.to('#successModal', { autoAlpha: 1, duration: 0.5 });
+                document.getElementById('waitlistForm').reset();
+            } catch (e) {
+                console.error("Firestore Write Error:", e);
+                // Use a custom message box instead of alert()
+                document.getElementById('error-message').textContent = `Submission Error: Data failed to write. Check console for details. (Possible Security Rule issue)`;
+                gsap.to('#errorMessage', { autoAlpha: 1, duration: 0.5 });
+            }
+            btn.innerHTML = originalText;
+        };
+
+        function fetchAndDisplayWaitlist(db, appId, currentUserId) {
+            // Note: This Admin Console is primarily for testing. 
+            // In a real deployment, you check the data directly in the Firebase Console.
+            // The read/list rule in Firestore should restrict this to your actual user ID.
+            if (!currentUserId) return;
+            
+            const container = document.getElementById('waitlist-viewer-container');
+            
+            // Only show the viewer if we are using the user's actual setup
+            if (appId === firebaseConfig.projectId) { 
+                 container.innerHTML = `
+                    <div class="max-w-7xl mx-auto px-4 py-12 opacity-0" id="admin-panel">
+                        <h3 class="text-2xl font-bold text-blue-400 mb-4">Admin Console (Testing View)</h3>
+                        <p class="text-sm text-gray-500 mb-4">Data is saved to project: <strong>${appId}</strong>. View live entries in the Firebase Console.</p>
+                        <div class="glass-panel overflow-hidden rounded-xl border border-blue-400/30">
+                            <table class="min-w-full text-left text-sm text-gray-400">
+                                <thead class="bg-white/5 text-gray-200 uppercase">
+                                    <tr><th class="px-6 py-3">Name</th><th class="px-6 py-3">Email</th><th class="px-6 py-3">Tier</th></tr>
+                                </thead>
+                                <tbody id="waitlist-body" class="divide-y divide-gray-800"></tbody>
+                            </table>
+                        </div>
+                    </div>`;
+                
+                gsap.to('#admin-panel', { opacity: 1, duration: 1, delay: 1 });
+
+                // Set up the real-time listener
+                onSnapshot(collection(db, `/artifacts/${appId}/public/data/waitlist_entries`), (snap) => {
+                    const body = document.getElementById('waitlist-body');
+                    if (!body) return;
+                    body.innerHTML = '';
+                    snap.forEach(doc => {
+                        const d = doc.data();
+                        body.innerHTML += `<tr class="hover:bg-white/5 transition"><td class="px-6 py-4">${d.name}</td><td class="px-6 py-4">${d.email}</td><td class="px-6 py-4 text-blue-400">${d.tier}</td></tr>`;
+                    });
+                }, (error) => {
+                    console.warn("Firestore snapshot access denied. This is expected if security rules are set correctly for non-admin users.", error);
+                    const adminPanel = document.getElementById('admin-panel');
+                    if(adminPanel) adminPanel.innerHTML = `<div class="p-8 text-center text-red-400">Access Denied. Check your Firestore Security Rules. Data is still being collected!</div>`;
+                });
+            }
+        }
+
+        authenticateAndSetup();
+    </script>
+
+    <style>
+        :root {
+            --primary: #0A0A1F;
+            --accent: #3B82F6;
+            --accent-glow: #60A5FA;
+        }
+        
+        body {
+            background-color: var(--primary);
+            color: #fff;
+            overflow-x: hidden;
+        }
+
+        /* Three.js Canvas behind everything */
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            opacity: 0.6;
+        }
+
+        /* Advanced Glassmorphism */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        /* 3D Tilt Card Container */
+        .tilt-card {
+            transform-style: preserve-3d;
+            transform: perspective(1000px);
+        }
+        
+        /* Text Gradient Animation */
+        .animate-gradient-text {
+            background: linear-gradient(to right, #3B82F6, #93C5FD, #3B82F6);
+            background-size: 200% auto;
+            color: transparent;
+            -webkit-background-clip: text;
+            background-clip: text;
+            animation: shine 3s linear infinite;
+        }
+
+        @keyframes shine {
+            to { background-position: 200% center; }
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0A0A1F; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3B82F6; }
+
+        /* Cursor Follower */
+        .cursor-dot, .cursor-outline {
+            position: fixed;
+            top: 0;
+            left: 0;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            z-index: 9999;
+            pointer-events: none;
+        }
+        .cursor-dot { width: 8px; height: 8px; background-color: #3B82F6; }
+        .cursor-outline { width: 40px; height: 40px; border: 1px solid rgba(59, 130, 246, 0.5); transition: width 0.2s, height 0.2s; }
+    </style>
+</head>
+<body class="antialiased selection:bg-blue-500 selection:text-white">
+
+    <!-- Custom Cursor -->
+    <div class="cursor-dot hidden md:block"></div>
+    <div class="cursor-outline hidden md:block"></div>
+
+    <!-- 3D Background -->
+    <div id="canvas-container"></div>
+
+    <!-- Success Modal -->
+    <div id="successModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 opacity-0 invisible">
+        <div class="glass-panel p-8 rounded-2xl max-w-sm text-center transform scale-90 transition-all duration-300">
+            <div class="w-16 h-16 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-400 text-3xl">✓</div>
+            <h3 class="text-2xl font-bold mb-2">Spot Secured!</h3>
+            <p class="text-gray-400 mb-6">You are now on the priority list for VitaMate.</p>
+            <button onclick="gsap.to('#successModal', {autoAlpha: 0})" class="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 font-bold transition">Awesome</button>
+        </div>
+    </div>
+    
+    <!-- Error Message Box -->
+    <div id="errorMessage" class="fixed top-4 right-4 z-50 opacity-0 invisible">
+        <div class="glass-panel p-4 rounded-xl max-w-sm bg-red-900/50 border border-red-500/50">
+            <p class="text-red-300 font-bold" id="error-message">Error processing submission. Check console for details.</p>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="fixed top-0 w-full z-40 border-b border-white/5 bg-slate-900/80 backdrop-blur-md">
+        <div class="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
+            <div class="flex items-center gap-3 group cursor-pointer">
+                <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-blue-600/20 group-hover:scale-110 transition-transform duration-300">V</div>
+                <span class="font-bold text-xl tracking-tight">VitaMate</span>
+            </div>
+            <div class="hidden md:flex items-center gap-8">
+                <a href="#impact" class="text-sm text-gray-400 hover:text-white transition">Impact</a>
+                <a href="#features" class="text-sm text-gray-400 hover:text-white transition">Intelligence</a>
+                <a href="#pricing" class="text-sm text-gray-400 hover:text-white transition">Tiers</a>
+                <a href="#join" class="px-6 py-2.5 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold shadow-lg shadow-blue-600/20 transition-all hover:-translate-y-0.5">Get Early Access</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="relative min-h-screen flex items-center justify-center pt-20" id="top">
+        <div class="max-w-7xl mx-auto px-6 text-center z-10">
+            <div class="inline-block mb-6 px-4 py-1.5 rounded-full border border-blue-500/30 bg-blue-500/10 text-blue-400 text-sm font-medium tracking-wide opacity-0 translate-y-4 animate-reveal">
+                ✨ The Future of Household Nutrition
+            </div>
+            
+            <h1 class="text-5xl md:text-8xl font-bold tracking-tighter mb-8 leading-[1.1]">
+                <span class="block opacity-0 translate-y-8 animate-reveal stagger-1">Your Kitchen,</span>
+                <span class="block opacity-0 translate-y-8 animate-reveal stagger-2 animate-gradient-text">Powered by AI.</span>
+            </h1>
+            
+            <p class="max-w-2xl mx-auto text-lg md:text-xl text-gray-400 mb-10 opacity-0 translate-y-8 animate-reveal stagger-3 leading-relaxed">
+                VitaMate coordinates your family's biometric health goals with your real-time inventory. Zero waste. Perfect nutrition. Automated.
+            </p>
+            
+            <div class="flex flex-col md:flex-row items-center justify-center gap-4 opacity-0 translate-y-8 animate-reveal stagger-4">
+                <a href="#join" class="group relative px-8 py-4 bg-blue-600 rounded-xl font-bold text-lg overflow-hidden transition-transform hover:scale-105">
+                    <div class="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:animate-shimmer"></div>
+                    <span class="relative">Start Free Beta</span>
+                </a>
+                <a href="#features" class="px-8 py-4 rounded-xl border border-white/10 hover:bg-white/5 font-medium text-lg transition-colors">
+                    View Features
+                </a>
+            </div>
+        </div>
+
+        <!-- Scroll Indicator -->
+        <div class="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 opacity-50 animate-bounce">
+            <span class="text-xs uppercase tracking-widest">Scroll</span>
+            <div class="w-px h-12 bg-gradient-to-b from-blue-500 to-transparent"></div>
+        </div>
+    </section>
+
+    <!-- Live Statistics (Animated Counters) -->
+    <section id="impact" class="py-32 relative">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <!-- Stat Card 1 -->
+                <div class="glass-panel p-10 rounded-3xl tilt-card group hover:border-blue-500/50 transition-colors duration-500">
+                    <div class="text-blue-500 mb-4 text-4xl"><i class="fas fa-leaf"></i></div>
+                    <div class="text-6xl font-bold mb-2 flex items-baseline">
+                        <span class="counter" data-target="48">0</span>%
+                    </div>
+                    <p class="text-gray-400 font-medium">Reduction in food waste</p>
+                </div>
+                
+                <!-- Stat Card 2 -->
+                <div class="glass-panel p-10 rounded-3xl tilt-card group hover:border-blue-500/50 transition-colors duration-500">
+                    <div class="text-blue-500 mb-4 text-4xl"><i class="fas fa-clock"></i></div>
+                    <div class="text-6xl font-bold mb-2 flex items-baseline">
+                        <span class="counter" data-target="7">0</span>.2 hrs
+                    </div>
+                    <p class="text-gray-400 font-medium">Saved per week</p>
+                </div>
+                
+                <!-- Stat Card 3 -->
+                <div class="glass-panel p-10 rounded-3xl tilt-card group hover:border-blue-500/50 transition-colors duration-500">
+                    <div class="text-blue-500 mb-4 text-4xl"><i class="fas fa-star"></i></div>
+                    <div class="text-6xl font-bold mb-2 flex items-baseline">
+                        <span class="counter" data-target="98">0</span>%
+                    </div>
+                    <p class="text-gray-400 font-medium">User satisfaction</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Feature Showcase (Scroll Triggered) -->
+    <section id="features" class="py-32 relative overflow-hidden">
+        <div class="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-transparent via-blue-900/10 to-transparent pointer-events-none"></div>
+        
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="text-center mb-24">
+                <h2 class="text-4xl md:text-6xl font-bold mb-6">Intelligence Built In.</h2>
+                <p class="text-xl text-gray-400 max-w-2xl mx-auto">Three core engines power the VitaMate ecosystem, learning from your habits to optimize your life.</p>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-20 items-center mb-32 feature-row">
+                <div class="order-2 md:order-1 opacity-0 -translate-x-20 transition-all duration-1000 feature-content">
+                    <h3 class="text-3xl font-bold mb-4 text-blue-400">1. The Biometric Engine</h3>
+                    <p class="text-gray-400 text-lg leading-relaxed mb-6">
+                        Stop guessing calories. VitaMate syncs with your health data to generate meal plans that specifically target your BMI goals, muscle recovery needs, and dietary restrictions (Keto, Vegan, Diabetic).
+                    </p>
+                    <ul class="space-y-3 text-gray-300">
+                        <li class="flex items-center gap-3"><div class="w-1.5 h-1.5 rounded-full bg-blue-500"></div>Auto-Macro Calculation</li>
+                        <li class="flex items-center gap-3"><div class="w-1.5 h-1.5 rounded-full bg-blue-500"></div>Post-Workout Meal Sync</li>
+                    </ul>
+                </div>
+                <div class="order-1 md:order-2 glass-panel p-8 rounded-3xl aspect-video flex items-center justify-center bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-white/10 opacity-0 translate-x-20 transition-all duration-1000 feature-visual">
+                    <!-- CSS Animation Visual Placeholder -->
+                    <div class="relative w-32 h-32">
+                        <div class="absolute inset-0 border-4 border-blue-500/30 rounded-full animate-ping"></div>
+                        <div class="absolute inset-0 border-4 border-blue-500 rounded-full"></div>
+                        <div class="absolute inset-0 flex items-center justify-center font-bold text-2xl">AI</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-20 items-center feature-row">
+                <div class="glass-panel p-8 rounded-3xl aspect-video flex items-center justify-center bg-gradient-to-br from-green-500/10 to-blue-500/10 border border-white/10 opacity-0 -translate-x-20 transition-all duration-1000 feature-visual">
+                    <!-- CSS Visual -->
+                     <div class="relative w-40 h-48 bg-white/5 rounded-xl border border-white/10 flex flex-col p-4 gap-2">
+                        <div class="w-full h-2 bg-gray-700 rounded animate-pulse"></div>
+                        <div class="w-2/3 h-2 bg-gray-700 rounded animate-pulse"></div>
+                        <div class="mt-auto w-full h-8 bg-green-500/20 rounded flex items-center justify-center text-green-400 text-xs font-bold border border-green-500/50">SCANNED</div>
+                     </div>
+                </div>
+                <div class="opacity-0 translate-x-20 transition-all duration-1000 feature-content">
+                    <h3 class="text-3xl font-bold mb-4 text-green-400">2. The Vision Engine</h3>
+                    <p class="text-gray-400 text-lg leading-relaxed mb-6">
+                        Don't type. Just snap. Take a photo of your grocery bill or open fridge, and our Vision Engine identifies items, categorizes them, and predicts their shelf life instantly.
+                    </p>
+                    <ul class="space-y-3 text-gray-300">
+                        <li class="flex items-center gap-3"><div class="w-1.5 h-1.5 rounded-full bg-green-500"></div>Receipt OCR Technology</li>
+                        <li class="flex items-center gap-3"><div class="w-1.5 h-1.5 rounded-full bg-green-500"></div>Real-time Expiry Tracking</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing (Interactive Cards) -->
+    <section id="pricing" class="py-32">
+        <div class="max-w-7xl mx-auto px-6">
+            <h2 class="text-4xl md:text-6xl font-bold text-center mb-16">Investment Tiers</h2>
+            <div class="grid md:grid-cols-4 gap-8">
+                <!-- Lite (Free) -->
+                <div class="glass-panel p-8 rounded-3xl border border-white/5 hover:border-gray-400 transition-colors duration-300 relative">
+                    <h3 class="text-xl font-bold text-gray-400">Lite</h3>
+                    <div class="text-4xl font-bold mt-4 mb-6">$0 <span class="text-lg text-gray-500 font-normal">/mo</span></div>
+                    <ul class="space-y-4 text-sm text-gray-400 mb-8">
+                        <li>• Manual Inventory</li>
+                        <li>• Basic Recipes</li>
+                        <li>• Community Access</li>
+                        <li class="text-transparent">.</li>
+                    </ul>
+                    <a href="#join" class="block w-full py-3 rounded-xl border border-white/20 text-center hover:bg-white/5 transition">Select Lite</a>
+                </div>
+                
+                <!-- Solo Pro -->
+                <div class="glass-panel p-8 rounded-3xl border border-white/5 hover:border-blue-400 transition-colors duration-300 relative">
+                    <h3 class="text-xl font-bold text-gray-400">Solo Pro</h3>
+                    <div class="text-4xl font-bold mt-4 mb-6">$5.99 <span class="text-lg text-gray-500 font-normal">/mo</span></div>
+                    <ul class="space-y-4 text-sm text-gray-400 mb-8">
+                        <li class="flex items-center gap-2"><span class="text-blue-400">✓</span> 1 Member Profile</li>
+                        <li class="flex items-center gap-2"><span class="text-blue-400">✓</span> Biometric AI Sync</li>
+                        <li class="flex items-center gap-2"><span class="text-blue-400">✓</span> Receipt Scanning</li>
+                        <li class="flex items-center gap-2"><span class="text-transparent">✓</span> <span class="text-gray-400">Basic Waste Analytics</span></li>
+                    </ul>
+                    <a href="#join" class="block w-full py-3 rounded-xl border border-white/20 text-center hover:bg-white/5 transition">Select Solo</a>
+                </div>
+
+                <!-- Duo Pro (New Featured Card) -->
+                <div class="glass-panel p-8 rounded-3xl border-2 border-green-500 relative transform scale-105 shadow-2xl shadow-green-900/20">
+                    <div class="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-green-600 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">Best For Couples</div>
+                    <h3 class="text-xl font-bold text-white">Duo Pro</h3>
+                    <div class="text-4xl font-bold mt-4 mb-6">$9.99 <span class="text-lg text-gray-500 font-normal">/mo</span></div>
+                    <ul class="space-y-4 text-sm text-gray-300 mb-8">
+                        <li class="flex items-center gap-2"><span class="text-green-400">✓</span> 2 Member Profiles</li>
+                        <li class="flex items-center gap-2"><span class="text-green-400">✓</span> Biometric AI Sync</li>
+                        <li class="flex items-center gap-2"><span class="text-green-400">✓</span> Receipt/Fridge Scanning</li>
+                        <li class="flex items-center gap-2"><span class="text-green-400">✓</span> Advanced Waste Analytics</li>
+                    </ul>
+                    <a href="#join" class="block w-full py-3 rounded-xl bg-green-600 text-center font-bold hover:bg-green-500 transition shadow-lg shadow-green-600/25">Select Duo</a>
+                </div>
+                
+                <!-- Family AI (Updated) -->
+                <div class="glass-panel p-8 rounded-3xl border border-white/5 hover:border-blue-400 transition-colors duration-300 relative">
+                    <h3 class="text-xl font-bold text-gray-400">Family AI</h3>
+                    <div class="text-4xl font-bold mt-4 mb-6">$14.99 <span class="text-lg text-gray-500 font-normal">/mo</span></div>
+                    <ul class="space-y-4 text-sm text-gray-400 mb-8">
+                        <li class="flex items-center gap-2"><span class="text-blue-400">✓</span> Up to 6 Profiles</li>
+                        <li class="flex items-center gap-2"><span class="text-blue-400">✓</span> Biometric AI Sync</li>
+                        <li class="flex items-center gap-2"><span class="text-blue-400">✓</span> Receipt/Fridge Scanning</li>
+                        <li class="flex items-center gap-2"><span class="text-blue-400">✓</span> Full Household Analytics</li>
+                    </ul>
+                    <a href="#join" class="block w-full py-3 rounded-xl border border-white/20 text-center hover:bg-white/5 transition">Select Family</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Waitlist Form (Updated Options) -->
+    <section id="join" class="py-32 relative">
+        <div class="max-w-xl mx-auto px-6 relative z-10">
+            <div class="glass-panel p-10 rounded-3xl text-center">
+                <h2 class="text-3xl font-bold mb-2">Join the Beta</h2>
+                <p class="text-gray-400 mb-8">Secure your spot in the future of nutrition.</p>
+                
+                <form id="waitlistForm" onsubmit="handleWaitlistSubmission(event)" class="space-y-4 text-left">
+                    <div>
+                        <label class="text-xs uppercase tracking-widest text-gray-500 mb-2 block">Full Name</label>
+                        <input type="text" id="name" required class="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors text-white">
+                    </div>
+                    <div>
+                        <label class="text-xs uppercase tracking-widest text-gray-500 mb-2 block">Email Address</label>
+                        <input type="email" id="email" required class="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors text-white">
+                    </div>
+                    <div>
+                        <label class="text-xs uppercase tracking-widest text-gray-500 mb-2 block">Interest Tier</label>
+                        <select id="tierInterest" class="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors text-white appearance-none">
+                            <option value="Duo">Duo Pro ($9.99)</option>
+                            <option value="Family">Family AI ($14.99)</option>
+                            <option value="Individual">Solo Pro ($5.99)</option>
+                            <option value="Free">Lite (Free)</option>
+                        </select>
+                    </div>
+                    <button type="submit" id="submitBtn" class="w-full py-4 rounded-xl bg-gradient-to-r from-blue-600 to-blue-500 font-bold text-lg shadow-lg shadow-blue-600/20 hover:shadow-blue-600/40 hover:scale-[1.02] transition-all duration-300">
+                        Reserve Spot
+                    </button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <!-- Admin Container -->
+    <div id="waitlist-viewer-container"></div>
+
+    <!-- Footer -->
+    <footer class="border-t border-white/5 py-12 bg-black/20">
+        <div class="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center">
+            <div class="text-2xl font-bold mb-4 md:mb-0">VitaMate</div>
+            <div class="text-gray-500 text-sm">© 2025 VitaMate Inc. Designed for the Future.</div>
+        </div>
+    </footer>
+
+    <!-- SCRIPT: ADVANCED ANIMATIONS & THREE.JS -->
+    <script>
+        // --- 1. THREE.JS NEURAL NETWORK BACKGROUND ---
+        const initThree = () => {
+            const container = document.getElementById('canvas-container');
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.deviceRatio);
+            container.appendChild(renderer.domElement);
+
+            // Particles
+            const geometry = new THREE.BufferGeometry();
+            const count = 150; // Number of nodes
+            const positions = new Float32Array(count * 3);
+            const velocities = [];
+
+            for(let i = 0; i < count * 3; i++) {
+                positions[i] = (Math.random() - 0.5) * 20; // Spread
+                if(i % 3 === 0) velocities.push({
+                    x: (Math.random() - 0.5) * 0.01,
+                    y: (Math.random() - 0.5) * 0.01,
+                    z: (Math.random() - 0.5) * 0.01
+                });
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const material = new THREE.PointsMaterial({ size: 0.15, color: 0x3B82F6, transparent: true, opacity: 0.8 });
+            const particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+
+            // Lines (Neural Connections)
+            const lineMaterial = new THREE.LineBasicMaterial({ color: 0x3B82F6, transparent: true, opacity: 0.15 });
+            const lineGeometry = new THREE.BufferGeometry();
+            const lines = new THREE.LineSegments(lineGeometry, lineMaterial);
+            scene.add(lines);
+
+            camera.position.z = 5;
+
+            // Mouse Interaction
+            let mouseX = 0;
+            let mouseY = 0;
+            window.addEventListener('mousemove', (e) => {
+                mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+                mouseY = -(e.clientY / window.innerHeight) * 2 + 1;
+                
+                // Custom Cursor Logic (GSAP)
+                gsap.to('.cursor-dot', { x: e.clientX, y: e.clientY, duration: 0 });
+                gsap.to('.cursor-outline', { x: e.clientX, y: e.clientY, duration: 0.15 });
+            });
+
+            // Animation Loop
+            const animate = () => {
+                requestAnimationFrame(animate);
+
+                const positions = particles.geometry.attributes.position.array;
+                const linePositions = [];
+
+                // Update Particles
+                for(let i = 0; i < count; i++) {
+                    const ix = i * 3;
+                    const iy = i * 3 + 1;
+                    const iz = i * 3 + 2;
+
+                    // Base Movement
+                    positions[ix] += velocities[i].x;
+                    positions[iy] += velocities[i].y;
+                    positions[iz] += velocities[i].z;
+
+                    // Boundary Check (Bounce)
+                    if(Math.abs(positions[ix]) > 10) velocities[i].x *= -1;
+                    if(Math.abs(positions[iy]) > 6) velocities[i].y *= -1;
+                    if(Math.abs(positions[iz]) > 5) velocities[i].z *= -1;
+
+                    // Mouse repulsion (Subtle)
+                    const distToMouse = Math.sqrt(
+                        Math.pow(positions[ix] - mouseX * 5, 2) +
+                        Math.pow(positions[iy] - mouseY * 3, 2)
+                    );
+                    if (distToMouse < 2) {
+                        positions[ix] += (positions[ix] - mouseX * 5) * 0.01;
+                        positions[iy] += (positions[iy] - mouseY * 3) * 0.01;
+                    }
+
+                    // Find connections
+                    for(let j = i + 1; j < count; j++) {
+                        const jx = j * 3;
+                        const jy = j * 3 + 1;
+                        const jz = j * 3 + 2;
+                        
+                        const dx = positions[ix] - positions[jx];
+                        const dy = positions[iy] - positions[jy];
+                        const dz = positions[iz] - positions[jz];
+                        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                        if(dist < 2.5) {
+                            linePositions.push(positions[ix], positions[iy], positions[iz]);
+                            linePositions.push(positions[jx], positions[jy], positions[jz]);
+                        }
+                    }
+                }
+
+                particles.geometry.attributes.position.needsUpdate = true;
+                
+                // Update Lines
+                lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+
+                // Subtle Rotation
+                scene.rotation.y += 0.001;
+                scene.rotation.x += 0.0005;
+
+                renderer.render(scene, camera);
+            };
+            animate();
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        };
+
+        // --- 2. GSAP ANIMATIONS & INTERACTIONS ---
+        const initAnimations = () => {
+            gsap.registerPlugin(ScrollTrigger);
+
+            // Hero Reveal
+            gsap.to(".animate-reveal", {
+                y: 0,
+                opacity: 1,
+                duration: 1,
+                stagger: 0.2,
+                ease: "power3.out"
+            });
+
+            // Animated Counters
+            const counters = document.querySelectorAll('.counter');
+            counters.forEach(counter => {
+                const target = +counter.getAttribute('data-target');
+                ScrollTrigger.create({
+                    trigger: counter,
+                    start: "top 80%",
+                    once: true,
+                    onEnter: () => {
+                        gsap.to(counter, {
+                            innerText: target,
+                            duration: 2,
+                            snap: { innerText: 1 },
+                            ease: "power2.out"
+                        });
+                    }
+                });
+            });
+
+            // Feature Section Scroll Trigger (Sides sliding in)
+            const rows = document.querySelectorAll('.feature-row');
+            rows.forEach(row => {
+                const content = row.querySelector('.feature-content');
+                const visual = row.querySelector('.feature-visual');
+                
+                ScrollTrigger.create({
+                    trigger: row,
+                    start: "top 70%",
+                    onEnter: () => {
+                        gsap.to([content, visual], {
+                            x: 0,
+                            opacity: 1,
+                            duration: 1,
+                            ease: "power3.out"
+                        });
+                    }
+                });
+            });
+
+            // 3D Tilt Effect for Cards
+            const cards = document.querySelectorAll('.tilt-card');
+            cards.forEach(card => {
+                card.addEventListener('mousemove', (e) => {
+                    const rect = card.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    const centerX = rect.width / 2;
+                    const centerY = rect.height / 2;
+                    
+                    const rotateX = ((y - centerY) / centerY) * -10; // Rotate X based on Y position
+                    const rotateY = ((x - centerX) / centerX) * 10;   // Rotate Y based on X position
+
+                    gsap.to(card, {
+                        transform: `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`,
+                        duration: 0.5,
+                        ease: "power2.out"
+                    });
+                });
+
+                card.addEventListener('mouseleave', () => {
+                    gsap.to(card, {
+                        transform: `perspective(1000px) rotateX(0) rotateY(0) scale3d(1, 1, 1)`,
+                        duration: 0.5
+                    });
+                });
+            });
+        };
+
+        // --- 3. PAGE LOAD AND SCROLL FIX ---
+        const fixInitialScroll = () => {
+            // Check if there is a hash in the URL (e.g., #join)
+            if (window.location.hash) {
+                // Remove the hash from the URL without triggering a new navigation
+                history.replaceState('', document.title, window.location.pathname + window.location.search);
+            }
+            // Explicitly set scroll to top just in case
+            window.scrollTo(0, 0);
+        };
+
+        // Init
+        window.onload = () => {
+            fixInitialScroll(); // <--- FIX IS CALLED HERE BEFORE EVERYTHING ELSE
+            initThree();
+            initAnimations();
+        };
+
+    </script>
+</body>
+</html>
